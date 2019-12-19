@@ -1,0 +1,150 @@
+{
+package internal
+
+import "github.com/craiggwilson/mongo-go-server/mrpc/tree"
+
+func toIfaceSlice(v interface{}) []interface{} {
+    if v == nil {
+        return nil
+    }
+    return v.([]interface{})
+}
+}
+
+Tree <- _ v:(Attribute / Command / Service / Struct)* EOF {
+    t := tree.New()
+    for _, i := range toIfaceSlice(v) {
+        switch ti := i.(type) {
+        case *tree.Attribute:
+            t.AddAttribute(ti)
+        case *tree.Command:
+            t.AddCommand(ti)
+        case *tree.Service:
+            t.AddService(ti)
+        case *tree.Struct:
+            t.AddStruct(ti)
+        default:
+            return nil, errors.New("invalid top-level declaration")
+        }
+    }
+
+    return t, nil
+}
+
+Attribute <- _ "@" lang:AttributeLang? name:ID __ value:String _ ";" {
+    langStr := ""
+    if lang != nil {
+        langStr = lang.(string)
+    }
+    return tree.NewAttribute(langStr, name.(string), value.(string)), nil
+}
+
+AttributeLang <- lang:ID ":" {
+    return lang.(string), nil
+}
+
+Command <- _ "command" __ name:ID _ "{" _ attrs:Attribute* _ req:Request _ resp:Response _ "}" {
+    t := tree.NewCommand(name.(string))
+    
+    for _, attr := range toIfaceSlice(attrs) {
+        t.AddAttribute(attr.(*tree.Attribute))
+    }
+
+    t.Request = req.(*tree.Struct)
+    t.Response = resp.(*tree.Struct)
+
+    return t, nil
+}
+
+Request <- _ "request" _ "{" _ attrs:Attribute* _ fields:Field* _ "}" {
+    s := tree.NewStruct("")
+
+    for _, attr := range toIfaceSlice(attrs) {
+        s.AddAttribute(attr.(*tree.Attribute))
+    }
+
+    for _, f := range toIfaceSlice(fields) {
+        s.AddField(f.(*tree.Field))
+    }
+
+    return s, nil
+}
+
+Response <- _ "response" _ "{" _ attrs:Attribute* _ fields:Field* _ "}" {
+    s := tree.NewStruct("")
+    
+    for _, attr := range toIfaceSlice(attrs) {
+        s.AddAttribute(attr.(*tree.Attribute))
+    }
+
+    for _, f := range toIfaceSlice(fields) {
+        s.AddField(f.(*tree.Field))
+    }
+
+    return s, nil
+}
+
+Service <- _ "service" __ name:ID _ "{" _ attrs:Attribute* _ cmds:CommandRef* _ "}" {
+    s := tree.NewService(name.(string))
+
+    for _, attr := range toIfaceSlice(attrs) {
+        s.AddAttribute(attr.(*tree.Attribute))
+    }
+    
+    for _, cmd := range toIfaceSlice(cmds) {
+        s.AddCommandRef(cmd.(string))
+    }
+
+    return s, nil
+}
+
+CommandRef <- _ name:ID ";" {
+    return name.(string), nil
+}
+
+Struct <- _ "struct" __ name:ID _ "{" _ attrs:Attribute* _ fields:Field* _ "}" {
+    s := tree.NewStruct(name.(string))
+
+    for _, attr := range toIfaceSlice(attrs) {
+        s.AddAttribute(attr.(*tree.Attribute))
+    }
+
+    for _, f := range toIfaceSlice(fields) {
+        s.AddField(f.(*tree.Field))
+    }
+
+    return s, nil
+}
+
+Field <- _ name:ID __ r:FieldTypeRef _ ";" {
+    f := tree.NewField(name.(string))
+    f.TypeRef = r.(string)
+    return f, nil
+}
+
+FieldTypeRef <- "[]"? "*"? TypeRef {
+    return string(c.text), nil
+}
+
+ID <- [a-zA-Z] [a-zA-Z0-9_]* {
+    return string(c.text), nil
+}
+
+TypeRef <- ID ("." ID)* {
+    return string(c.text), nil
+}
+
+String <- '"' ( !EscapedChar . / '\\' EscapeSequence )* '"' {
+    c.text = bytes.Replace(c.text, []byte(`\/`), []byte(`/`), -1)
+    return strconv.Unquote(string(c.text))
+}
+
+EscapedChar <- [\x00-\x1f"\\]
+EscapeSequence <- SingleCharEscape / UnicodeEscape
+SingleCharEscape <- ["\\/bfnrt]
+UnicodeEscape <- 'u' HexDigit HexDigit HexDigit HexDigit
+
+_ "whitespace" <- [ \r\n\t]*
+__ "whitespace" <- [ \r\n\t]+
+EOF <- _ !.
+

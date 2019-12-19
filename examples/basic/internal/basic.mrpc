@@ -1,0 +1,48 @@
+@go:package "internal";
+
+service basic {
+    buildInfo;
+    isMaster;
+    custom;
+}
+
+command buildInfo {
+    @alias "buildinfo";
+
+    request {}
+
+    response {
+        ok int32;
+        version string;
+        versionArray []int32;
+    }
+}
+
+command isMaster {
+    @alias "ismaster";
+
+    request {
+        compression []string;
+    }
+    
+    response {
+        ok int32;
+        ismaster bool;
+        maxBsonObjectSize int32;
+        maxMessageSizeBytes int32;
+        maxWriteBatchSize int32;
+        logicalSessionTimeoutMinutes int32;
+        minWireVersion int32;
+        maxWireVersion int32;
+        readOnly bool;
+        compression []string;
+    }
+}
+
+command custom {
+    request{}
+
+    response{
+        ok int32;
+    }
+}
