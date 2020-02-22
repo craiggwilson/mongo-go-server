@@ -8,6 +8,8 @@ func New() *Tree {
 type Tree struct {
 	AttributeContainer
 
+	Filename string
+
 	Commands []*Command
 	Services []*Service
 	Structs  []*Struct

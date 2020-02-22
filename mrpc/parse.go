@@ -11,5 +11,8 @@ func ParseFile(filename string) (*tree.Tree, error) {
 		return nil, err
 	}
 
-	return t.(*tree.Tree), nil
+	tr := t.(*tree.Tree)
+	tr.Filename = filename
+
+	return tr, nil
 }

@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"crypto/tls"
 	"log"
 	"os"
 	"strconv"
@@ -21,8 +20,8 @@ func main() {
 	})
 
 	svr := &mongo.Server{
-		Handler:             mux,
-		ConnectionDecorator: mongo.TLSConnectionDecorator(&tls.Config{}),
+		Handler: mux,
+		// ConnectionDecorator: mongo.TLSConnectionDecorator(&tls.Config{}),
 	}
 
 	log.Println("serving MongoDB...")
@@ -41,7 +40,7 @@ type basicService struct {
 	VersionArray                 []int32
 }
 
-func (svc *basicService) BuildInfo(_ context.Context, _ *mongo.CommandRequest, _ *internal.BuildInfoRequest) (*internal.BuildInfoResponse, error) {
+func (svc *basicService) HandleBuildInfo(_ context.Context, _ *mongo.CommandRequest, _ *internal.BuildInfoRequest) (*internal.BuildInfoResponse, error) {
 	versionStrArray := make([]string, 0, len(svc.VersionArray))
 	for _, p := range svc.VersionArray {
 		versionStrArray = append(versionStrArray, strconv.Itoa(int(p)))
@@ -54,14 +53,14 @@ func (svc *basicService) BuildInfo(_ context.Context, _ *mongo.CommandRequest, _
 	}, nil
 }
 
-func (svc *basicService) Custom(ctx context.Context, _ *mongo.CommandRequest, _ *internal.CustomRequest) (*internal.CustomResponse, error) {
+func (svc *basicService) HandleCustom(ctx context.Context, _ *mongo.CommandRequest, _ *internal.CustomRequest) (*internal.CustomResponse, error) {
 	return nil, &mongo.Error{
 		Code:    10,
 		Message: "AHAHAHA",
 	}
 }
 
-func (svc *basicService) IsMaster(ctx context.Context, _ *mongo.CommandRequest, req *internal.IsMasterRequest) (*internal.IsMasterResponse, error) {
+func (svc *basicService) HandleIsMaster(ctx context.Context, _ *mongo.CommandRequest, req *internal.IsMasterRequest) (*internal.IsMasterResponse, error) {
 	svr := mongo.ServerFromContext(ctx)
 	maxDocumentSize := svr.MaxDocumentSize
 	if maxDocumentSize == 0 {
