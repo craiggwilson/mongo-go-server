@@ -16,6 +16,7 @@ func TestServer_ConnectAndClose(t *testing.T) {
 		done := make(chan struct{})
 
 		go func() {
+			time.Sleep(1 * time.Second)
 			s.Close()
 			close(done)
 		}()
@@ -37,6 +38,7 @@ func TestServer_ConnectAndClose(t *testing.T) {
 		done := make(chan struct{})
 
 		go func() {
+			time.Sleep(1 * time.Second)
 			s.Close()
 			close(done)
 		}()
@@ -54,18 +56,45 @@ func TestServer_ConnectAndShutdown(t *testing.T) {
 		s := mongotest.NewServer(nil)
 		c := s.Dial()
 
-		s.Shutdown(context.Background())
-
 		done := make(chan struct{})
 
 		go func() {
+			time.Sleep(1 * time.Second)
 			s.Shutdown(context.Background())
 			close(done)
 		}()
 
 		select {
 		case <-done:
-			panic("LOL")
+			t.Fatalf("expected no connections to be closed, but all were")
+		case <-time.After(1 * time.Second):
+			_ = c.Close()
+			select {
+			case <-done:
+			case <-time.After(1 * time.Second):
+				t.Fatalf("expected all connections to be closed, but some were not.")
+			}
+		}
+	})
+	t.Run("active connection", func(t *testing.T) {
+		s := mongotest.NewServer(nil)
+		c := s.Dial()
+
+		if _, err := c.Write([]byte{1, 0, 0, 0, 0}); err != nil {
+			t.Fatalf("expected no error, but got %v", err)
+		}
+
+		done := make(chan struct{})
+
+		go func() {
+			time.Sleep(1 * time.Second)
+			s.Shutdown(context.Background())
+			close(done)
+		}()
+
+		select {
+		case <-done:
+			t.Fatalf("expected no connections to be closed, but all were")
 		case <-time.After(1 * time.Second):
 			_ = c.Close()
 			select {
@@ -76,36 +105,3 @@ func TestServer_ConnectAndShutdown(t *testing.T) {
 		}
 	})
 }
-
-// func TestServer_ConnectAndShutdown(t *testing.T) {
-// 	ctx, shutdown := context.WithCancel(context.Background())
-// 	hostPort, s := startTestServer(context.Background(), nil)
-
-// 	c, err := net.Dial("tcp", hostPort)
-// 	if err != nil {
-// 		t.Fatalf("expected no error, but got %v", err)
-// 	}
-
-// 	watchedC := &closeWatchConn{Conn: c}
-
-// 	if _, err = c.Write([]byte{1, 0, 0, 0, 0}); err != nil {
-// 		t.Fatalf("expected no error, but got %v", err)
-// 	}
-
-// 	now := time.Now()
-// 	done := make(chan struct{})
-
-// 	go func() {
-// 		shutdown()
-// 		time.Sleep(3 * time.Second)
-// 		close(done)
-// 	}()
-
-// 	<-done
-
-// 	if watchedC.IsClosed() {
-// 		t.Fatalf("expected shutdown to wait until connection was closed")
-// 	}
-
-// 	_ = s.Close()
-// }

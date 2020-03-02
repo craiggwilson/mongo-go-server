@@ -98,10 +98,6 @@ func (s *Server) ListenAndServe(ctx context.Context, addr string) error {
 }
 
 func (s *Server) Serve(ctx context.Context, l net.Listener) error {
-	type deadlineSetter interface {
-		SetDeadline(time.Time) error
-	}
-
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -118,11 +114,6 @@ func (s *Server) Serve(ctx context.Context, l net.Listener) error {
 
 	ctx = context.WithValue(ctx, ServerContextKey, s)
 	for {
-		if ds, ok := l.(deadlineSetter); ok {
-			if err := ds.SetDeadline(time.Now().Add(5 * time.Second)); err != nil {
-				// TODO: LOG this
-			}
-		}
 		rwc, err := l.Accept()
 		if err != nil {
 			select {
@@ -161,7 +152,6 @@ func (s *Server) Serve(ctx context.Context, l net.Listener) error {
 		tempDelay = 0
 		c := s.newConn(connCtx, rwc)
 		c.setState(c.rwc, StateNew)
-		println("NEW CONN")
 		go c.serve(connCtx)
 	}
 }
@@ -206,7 +196,6 @@ func (s *Server) closeIdleConns() bool {
 	defer s.mu.Unlock()
 
 	allIdle := true
-	println("LEN", len(s.conns))
 	for c := range s.conns {
 		if s.IdleTimeout > 0 {
 			st, secs := c.getState()
