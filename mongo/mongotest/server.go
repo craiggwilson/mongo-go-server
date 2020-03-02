@@ -42,12 +42,9 @@ func (s *Server) Close() {
 	s.mu.Lock()
 	if !s.closed {
 		s.closed = true
-		_ = s.Listener.Close()
-		for c, st := range s.conns {
-			if st == mongo.StateNew || st == mongo.StateInactive {
-				_ = c.Close()
-			}
-		}
+		go func() {
+			_ = s.Config.Close()
+		}()
 	}
 	s.mu.Unlock()
 
@@ -63,8 +60,17 @@ func (s *Server) Dial() net.Conn {
 	return c
 }
 
-func (s *Server) Shutdown(ctx context.Context) error {
-	return s.Config.Shutdown(ctx)
+func (s *Server) Shutdown(ctx context.Context) {
+	s.mu.Lock()
+	if !s.closed {
+		s.closed = true
+		go func() {
+			_ = s.Config.Shutdown(ctx)
+		}()
+	}
+	s.mu.Unlock()
+
+	s.wg.Wait()
 }
 
 func (s *Server) Start() {
@@ -74,6 +80,18 @@ func (s *Server) Start() {
 
 	s.wrap()
 	s.goServe()
+}
+
+func (s *Server) TrackedConnections() map[net.Conn]mongo.ConnState {
+	cpy := make(map[net.Conn]mongo.ConnState)
+	s.mu.Lock()
+	if s.conns != nil {
+		for c, st := range s.conns {
+			cpy[c] = st
+		}
+	}
+	s.mu.Unlock()
+	return cpy
 }
 
 func (s *Server) goServe() {
@@ -132,21 +150,6 @@ func (s *Server) wrap() {
 			oldHook.OnConnStateChange(ctx, c, st, d)
 		}
 	})
-}
-
-type closeWatchConn struct {
-	net.Conn
-
-	closed bool
-}
-
-func (c *closeWatchConn) Close() error {
-	c.closed = true
-	return c.Conn.Close()
-}
-
-func (c *closeWatchConn) IsClosed() bool {
-	return c.IsClosed()
 }
 
 func newLocalListener() net.Listener {

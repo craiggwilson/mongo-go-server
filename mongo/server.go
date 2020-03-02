@@ -52,6 +52,7 @@ type Server struct {
 	Handler     MessageHandler
 	ErrorLogger ErrorLogger
 
+	IdleTimeout  time.Duration
 	ReadTimeout  time.Duration
 	WriteTimeout time.Duration
 
@@ -160,6 +161,7 @@ func (s *Server) Serve(ctx context.Context, l net.Listener) error {
 		tempDelay = 0
 		c := s.newConn(connCtx, rwc)
 		c.setState(c.rwc, StateNew)
+		println("NEW CONN")
 		go c.serve(connCtx)
 	}
 }
@@ -204,26 +206,23 @@ func (s *Server) closeIdleConns() bool {
 	defer s.mu.Unlock()
 
 	allIdle := true
+	println("LEN", len(s.conns))
 	for c := range s.conns {
-		st, secs := c.getState()
-		now := time.Now().Unix()
+		if s.IdleTimeout > 0 {
+			st, secs := c.getState()
+			idleTimeoutSecs := float64(5)
+			if st != StateNew && s.IdleTimeout.Seconds() > 5 {
+				idleTimeoutSecs = s.IdleTimeout.Seconds()
+			}
 
-		var idle bool
-		if st == StateNew {
-			// a connection is idle if it's been in any state for longer than 20 seconds
-			idle = secs < now-20
-		} else {
-			// a connection is idle if it's been in any other state for longer than 5 minutes
-			idle = secs < now-5*60
+			if secs >= time.Now().Unix()-int64(idleTimeoutSecs) {
+				c.rwc.Close()
+				delete(s.conns, c)
+				continue
+			}
 		}
 
-		if !idle {
-			allIdle = false
-			continue
-		}
-
-		c.rwc.Close()
-		delete(s.conns, c)
+		allIdle = false
 	}
 
 	return allIdle
@@ -365,7 +364,7 @@ func (f ConnectionDecoratorFunc) DecorateConnection(ctx context.Context, c net.C
 
 // A ConnState represents the state of a client connection to a server.
 // It's used by the optional Server.ConnState hook.
-type ConnState uint8
+type ConnState int
 
 const (
 	// StateNew represents a new connection that is expected to
