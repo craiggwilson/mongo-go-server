@@ -35,3 +35,11 @@ type MessageRequest struct {
 type MessageResponseWriter interface {
 	WriteMessage(msg wiremessage.WireMessage) error
 }
+
+// MessageResponseWriterFunc is a function implementation of the MessageResponseWriter interface.
+type MessageResponseWriterFunc func(wiremessage.WireMessage) error
+
+// WriteMessage implements the MessageResponseWriter interface.
+func (f MessageResponseWriterFunc) WriteMessage(msg wiremessage.WireMessage) error {
+	return f(msg)
+}

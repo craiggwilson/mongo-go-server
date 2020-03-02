@@ -38,6 +38,7 @@ func ListenAndServe(ctx context.Context, addr string, handler MessageHandler) er
 	return svr.ListenAndServe(ctx, addr)
 }
 
+// Server starts upa a server using the specified listener.
 func Serve(ctx context.Context, l net.Listener, handler MessageHandler) error {
 	svr := &Server{
 		Handler: handler,
@@ -95,6 +96,10 @@ func (s *Server) ListenAndServe(ctx context.Context, addr string) error {
 }
 
 func (s *Server) Serve(ctx context.Context, l net.Listener) error {
+	type deadlineSetter interface {
+		SetDeadline(time.Time) error
+	}
+
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -111,11 +116,18 @@ func (s *Server) Serve(ctx context.Context, l net.Listener) error {
 
 	ctx = context.WithValue(ctx, ServerContextKey, s)
 	for {
+		if ds, ok := l.(deadlineSetter); ok {
+			if err := ds.SetDeadline(time.Now().Add(5 * time.Second)); err != nil {
+				// TODO: LOG this
+			}
+		}
 		rw, err := l.Accept()
 		if err != nil {
 			select {
 			case <-s.getDoneChan():
 				return ErrServerClosed
+			case <-ctx.Done():
+				return ctx.Err()
 			default:
 			}
 
@@ -129,7 +141,7 @@ func (s *Server) Serve(ctx context.Context, l net.Listener) error {
 				if max := 1 * time.Second; tempDelay > max {
 					tempDelay = max
 				}
-				// LOG
+				// TODO: LOG
 				time.Sleep(tempDelay)
 				continue
 			}
@@ -174,7 +186,6 @@ func (s *Server) Shutdown(ctx context.Context) error {
 		}
 	}
 }
-
 func (s *Server) closeDoneChanLocked() {
 	ch := s.getDoneChanLocked()
 	select {
@@ -307,9 +318,9 @@ type onceCloseListener struct {
 	closeErr error
 }
 
-func (oc *onceCloseListener) Close() error {
-	oc.once.Do(oc.close)
-	return oc.closeErr
+func (l *onceCloseListener) Close() error {
+	l.once.Do(l.close)
+	return l.closeErr
 }
 
 func (oc *onceCloseListener) close() { oc.closeErr = oc.Listener.Close() }
@@ -383,11 +394,13 @@ func (c *conn) serve(ctx context.Context) {
 	c.localAddr = c.rwc.LocalAddr().String()
 	c.remoteAddr = c.rwc.RemoteAddr().String()
 	defer func() {
-		if err := recover(); err != nil && err != ErrAbortHandler {
-			const size = 64 << 10
-			buf := make([]byte, size)
-			buf = buf[:runtime.Stack(buf, false)]
-			c.server.logf("mongo: panic serving %v: %v\n%s", c.remoteAddr, err, buf)
+		if errint := recover(); errint != nil {
+			if err, ok := errint.(error); !ok && !errors.Is(err, ErrAbortHandler) {
+				const size = 64 << 10
+				buf := make([]byte, size)
+				buf = buf[:runtime.Stack(buf, false)]
+				c.server.logf("mongo: panic serving %v: %v\n%s", c.remoteAddr, err, buf)
+			}
 		}
 		_ = c.rwc.Close()
 		c.finalFlush()
