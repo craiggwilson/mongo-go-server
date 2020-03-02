@@ -60,6 +60,7 @@ type Server struct {
 	MaxMessageSize  int32
 
 	ConnectionDecorator ConnectionDecorator
+	ConnStateHook       ConnStateHook
 
 	mu            sync.Mutex
 	doneChan      chan struct{}
@@ -121,7 +122,7 @@ func (s *Server) Serve(ctx context.Context, l net.Listener) error {
 				// TODO: LOG this
 			}
 		}
-		rw, err := l.Accept()
+		rwc, err := l.Accept()
 		if err != nil {
 			select {
 			case <-s.getDoneChan():
@@ -151,14 +152,14 @@ func (s *Server) Serve(ctx context.Context, l net.Listener) error {
 
 		connCtx := ctx
 		if s.ConnectionDecorator != nil {
-			connCtx, rw = s.ConnectionDecorator.DecorateConnection(ctx, rw)
-			if connCtx == nil || rw == nil {
+			connCtx, rwc = s.ConnectionDecorator.DecorateConnection(ctx, rwc)
+			if connCtx == nil || rwc == nil {
 				panic("ConnDecorator cannot return a nil context.Context or net.Conn")
 			}
 		}
 		tempDelay = 0
-		c := s.newConn(rw)
-		s.trackConn(c, true)
+		c := s.newConn(connCtx, rwc)
+		c.setState(c.rwc, StateNew)
 		go c.serve(connCtx)
 	}
 }
@@ -204,12 +205,24 @@ func (s *Server) closeIdleConns() bool {
 
 	allIdle := true
 	for c := range s.conns {
-		if !c.isIdle() {
+		st, secs := c.getState()
+		now := time.Now().Unix()
+
+		var idle bool
+		if st == StateNew {
+			// a connection is idle if it's been in any state for longer than 20 seconds
+			idle = secs < now-20
+		} else {
+			// a connection is idle if it's been in any other state for longer than 5 minutes
+			idle = secs < now-5*60
+		}
+
+		if !idle {
 			allIdle = false
 			continue
 		}
 
-		_ = c.rwc.Close()
+		c.rwc.Close()
 		delete(s.conns, c)
 	}
 
@@ -266,9 +279,10 @@ func (s *Server) logf(format string, args ...interface{}) {
 	}
 }
 
-func (s *Server) newConn(rwc net.Conn) *conn {
+func (s *Server) newConn(ctx context.Context, rwc net.Conn) *conn {
 	return &conn{
 		connID: atomic.AddUint64(&s.currentConnID, 1),
+		ctx:    ctx,
 		server: s,
 		rwc:    rwc,
 	}
@@ -349,8 +363,64 @@ func (f ConnectionDecoratorFunc) DecorateConnection(ctx context.Context, c net.C
 	return f(ctx, c)
 }
 
+// A ConnState represents the state of a client connection to a server.
+// It's used by the optional Server.ConnState hook.
+type ConnState uint8
+
+const (
+	// StateNew represents a new connection that is expected to
+	// send a request immediately. Connections begin at this
+	// state and then transition to either StateActive or
+	// StateClosed.
+	StateNew ConnState = iota
+
+	// StateActive represents a connection that has read 1 or more
+	// bytes of a request. The Server.ConnState hook for
+	// StateActive fires before the request has entered a handler
+	// and doesn't fire again until the request has been
+	// handled. After the request is handled, the state
+	// transitions to StateClosed or StateInactive.
+	StateActive
+
+	// StateInactive represents a connection that has finished
+	// handling a request and is in the keep-alive state, waiting
+	// for a new request. Connections transition from StateInactive
+	// to either StateActive or StateClosed.
+	StateInactive
+
+	// StateClosed represents a closed connection.
+	// This is a terminal state.
+	StateClosed
+)
+
+var stateName = map[ConnState]string{
+	StateNew:      "new",
+	StateActive:   "active",
+	StateInactive: "inactive",
+	StateClosed:   "closed",
+}
+
+// String implements the fmt.Stringer interface.
+func (c ConnState) String() string {
+	return stateName[c]
+}
+
+// ConnStateHook is an interface for handling a connection state change.
+type ConnStateHook interface {
+	OnConnStateChange(ctx context.Context, c net.Conn, st ConnState, d time.Duration)
+}
+
+// ConnStateHookFunc is a function implementation of ConnStateHook.
+type ConnStateHookFunc func(context.Context, net.Conn, ConnState, time.Duration)
+
+// OnStateChange implements the ConnStateHook interface.
+func (f ConnStateHookFunc) OnConnStateChange(ctx context.Context, c net.Conn, st ConnState, d time.Duration) {
+	f(ctx, c, st, d)
+}
+
 type conn struct {
 	connID uint64
+	ctx    context.Context
 	server *Server
 	rwc    net.Conn
 
@@ -360,6 +430,8 @@ type conn struct {
 	r    *connReader
 	bufr *bufio.Reader
 	bufw *bufio.Writer
+
+	curState struct{ atomic uint64 } // packed (unixtime<<8|uint8(ConnState))
 }
 
 func (c *conn) finalFlush() {
@@ -373,11 +445,6 @@ func (c *conn) finalFlush() {
 		putBufioWriter(c.bufw)
 		c.bufw = nil
 	}
-}
-
-func (c *conn) isIdle() bool {
-	// TODO: implement this...
-	return false
 }
 
 func (c *conn) readMessage(ctx context.Context) (wiremessage.WireMessage, error) {
@@ -404,7 +471,7 @@ func (c *conn) serve(ctx context.Context) {
 		}
 		_ = c.rwc.Close()
 		c.finalFlush()
-		c.server.trackConn(c, false)
+		c.setState(c.rwc, StateClosed)
 	}()
 
 	maxMessageSize := c.server.MaxMessageSize
@@ -420,6 +487,7 @@ func (c *conn) serve(ctx context.Context) {
 
 	for {
 		msg, err := c.readMessage(ctx)
+		c.setState(c.rwc, StateActive)
 		if err != nil {
 			switch {
 			case err == io.EOF:
@@ -452,6 +520,35 @@ func (c *conn) serve(ctx context.Context) {
 		if err = resp.bufw.Flush(); err != nil {
 			c.server.logf("mongo: error writing response: %v", err)
 		}
+
+		c.setState(c.rwc, StateInactive)
+	}
+}
+
+func (c *conn) getState() (ConnState, int64) {
+	packedState := atomic.LoadUint64(&c.curState.atomic)
+	return ConnState(packedState & 0xff), int64(packedState >> 8)
+}
+
+func (c *conn) setState(nc net.Conn, state ConnState) {
+	srv := c.server
+	switch state {
+	case StateNew:
+		srv.trackConn(c, true)
+	case StateClosed:
+		srv.trackConn(c, false)
+	}
+
+	if state > 0xff || state < 0 {
+		panic("internal error")
+	}
+
+	secs := time.Now().Unix() << 8
+
+	packedState := uint64(secs) | uint64(state)
+	atomic.StoreUint64(&c.curState.atomic, packedState)
+	if hook := srv.ConnStateHook; hook != nil {
+		hook.OnConnStateChange(c.ctx, nc, state, time.Duration(secs)*time.Second)
 	}
 }
 

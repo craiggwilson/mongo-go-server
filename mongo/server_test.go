@@ -15,7 +15,7 @@ func TestServer_ConnectAndClose(t *testing.T) {
 		t.Fatalf("expected no error, but got %v", err)
 	}
 
-	_ = s.Close()
+	s.Close()
 }
 
 // func TestServer_ConnectAndShutdown(t *testing.T) {
