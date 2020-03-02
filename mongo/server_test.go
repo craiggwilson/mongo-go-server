@@ -31,7 +31,7 @@ func TestServer_ConnectAndClose(t *testing.T) {
 		s := mongotest.NewServer(nil)
 		c := s.Dial()
 
-		if _, err := c.Write([]byte{1, 0, 0, 0, 0}); err != nil {
+		if _, err := c.Write(mongotest.NewOpMsg(mongotest.NewDocument("test", 1))); err != nil {
 			t.Fatalf("expected no error, but got %v", err)
 		}
 
@@ -67,7 +67,7 @@ func TestServer_ConnectAndShutdown(t *testing.T) {
 		select {
 		case <-done:
 			t.Fatalf("expected no connections to be closed, but all were")
-		case <-time.After(1 * time.Second):
+		case <-time.After(5 * time.Second):
 			_ = c.Close()
 			select {
 			case <-done:
@@ -80,7 +80,7 @@ func TestServer_ConnectAndShutdown(t *testing.T) {
 		s := mongotest.NewServer(nil)
 		c := s.Dial()
 
-		if _, err := c.Write([]byte{1, 0, 0, 0, 0}); err != nil {
+		if _, err := c.Write(mongotest.NewOpMsg(mongotest.NewDocument("test", 1))); err != nil {
 			t.Fatalf("expected no error, but got %v", err)
 		}
 
@@ -95,7 +95,7 @@ func TestServer_ConnectAndShutdown(t *testing.T) {
 		select {
 		case <-done:
 			t.Fatalf("expected no connections to be closed, but all were")
-		case <-time.After(1 * time.Second):
+		case <-time.After(5 * time.Second):
 			_ = c.Close()
 			select {
 			case <-done:
