@@ -1,9 +1,23 @@
 @go:package "internal";
 
 service basic {
+    aggregate;
     buildInfo;
+    getLastError;
     isMaster;
-    custom;
+}
+
+command aggregate {
+    request {
+        @raw "true";
+
+        pipeline bsoncore.Array;
+    }
+
+    response {
+        ok int32;
+        cursor cursorFirst;
+    }
 }
 
 command buildInfo {
@@ -15,6 +29,19 @@ command buildInfo {
         ok int32;
         version string;
         versionArray []int32;
+    }
+}
+
+command getLastError {
+    request{}
+
+    response{
+        ok int32;
+        writtenTo string;
+        err string;
+        syncMillis int32;
+        n int32;
+        connectionID int32;
     }
 }
 
@@ -39,10 +66,14 @@ command isMaster {
     }
 }
 
-command custom {
-    request{}
+struct cursorFirst {
+    firstBatch bsoncore.Array;
+    id int64;
+    ns string;
+}
 
-    response{
-        ok int32;
-    }
+struct cursorNext {
+    nextBatch bsoncore.Array;
+    id int64;
+    ns string;
 }

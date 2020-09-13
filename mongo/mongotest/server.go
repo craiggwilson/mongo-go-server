@@ -32,7 +32,7 @@ type Server struct {
 	Config   *mongo.Server
 	HostPort string
 
-	conns  map[net.Conn]mongo.ConnState
+	conns  map[net.Conn]mongo.ConnectionState
 	mu     sync.Mutex
 	wg     sync.WaitGroup
 	closed bool
@@ -82,8 +82,8 @@ func (s *Server) Start() {
 	s.goServe()
 }
 
-func (s *Server) TrackedConnections() map[net.Conn]mongo.ConnState {
-	cpy := make(map[net.Conn]mongo.ConnState)
+func (s *Server) TrackedConnections() map[net.Conn]mongo.ConnectionState {
+	cpy := make(map[net.Conn]mongo.ConnectionState)
 	s.mu.Lock()
 	if s.conns != nil {
 		for c, st := range s.conns {
@@ -103,8 +103,8 @@ func (s *Server) goServe() {
 }
 
 func (s *Server) wrap() {
-	oldHook := s.Config.ConnStateHook
-	s.Config.ConnStateHook = mongo.ConnStateHookFunc(func(ctx context.Context, c net.Conn, st mongo.ConnState, d time.Duration) {
+	oldHook := s.Config.ConnectionStateHook
+	s.Config.ConnectionStateHook = mongo.ConnectionStateHookFunc(func(ctx context.Context, c net.Conn, st mongo.ConnectionState, d time.Duration) {
 		s.mu.Lock()
 		defer s.mu.Unlock()
 		switch st {
@@ -114,7 +114,7 @@ func (s *Server) wrap() {
 				panic("invalid state transition")
 			}
 			if s.conns == nil {
-				s.conns = make(map[net.Conn]mongo.ConnState)
+				s.conns = make(map[net.Conn]mongo.ConnectionState)
 			}
 
 			s.conns[c] = st
@@ -147,7 +147,7 @@ func (s *Server) wrap() {
 		}
 
 		if oldHook != nil {
-			oldHook.OnConnStateChange(ctx, c, st, d)
+			oldHook.OnConnectionStateChange(ctx, c, st, d)
 		}
 	})
 }

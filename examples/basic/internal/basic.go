@@ -8,10 +8,72 @@ import (
 	"github.com/craiggwilson/mongo-go-server/mongo"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/bson/bsoncodec"
+	"go.mongodb.org/mongo-driver/x/bsonx/bsoncore"
 )
 
 type registryProvider interface {
 	Registry(ctx context.Context) *bsoncodec.Registry
+}
+
+type AggregateCommandHandler interface {
+	HandleAggregate(context.Context, *mongo.CommandRequest, *AggregateRequest) (*AggregateResponse, error)
+}
+
+type AggregateCommandHandlerFunc func(context.Context, *mongo.CommandRequest, *AggregateRequest) (*AggregateResponse, error)
+
+func (f AggregateCommandHandlerFunc) HandleAggregate(ctx context.Context, orig *mongo.CommandRequest, req *AggregateRequest) (*AggregateResponse, error) {
+	return f(ctx, orig, req)
+}
+
+type AggregateRequest struct {
+	Pipeline bsoncore.Array `json:"pipeline" bson:"pipeline"`
+}
+
+type AggregateResponse struct {
+	OK     int32       `json:"ok" bson:"ok"`
+	Cursor CursorFirst `json:"cursor" bson:"cursor"`
+}
+
+type aggregateCommandHandlerImpl struct {
+	impl AggregateCommandHandler
+}
+
+func (h *aggregateCommandHandlerImpl) HandleCommand(ctx context.Context, resp mongo.CommandResponseWriter, req *mongo.CommandRequest) error {
+	reg := bson.DefaultRegistry
+	if rp, ok := h.impl.(registryProvider); ok {
+		reg = rp.Registry(ctx)
+	}
+
+	var typedReq AggregateRequest
+	if err := bson.UnmarshalWithRegistry(reg, req.Document, &typedReq); err != nil {
+		return &mongo.Error{
+			Code:     mongo.CodeFailedToParse,
+			CodeName: mongo.CodeToName(mongo.CodeFailedToParse),
+			Message:  "invalid aggregate command",
+			Cause:    err,
+		}
+	}
+
+	typedResp, err := h.impl.HandleAggregate(ctx, req, &typedReq)
+	if err != nil {
+		return err
+	}
+
+	respDoc, err := bson.MarshalWithRegistry(reg, typedResp)
+	if err != nil {
+		return &mongo.Error{
+			Code:     mongo.CodeInternalError,
+			CodeName: mongo.CodeToName(mongo.CodeInternalError),
+			Message:  "failed marshaling aggregate command output",
+			Cause:    err,
+		}
+	}
+
+	return resp.WriteSingleDocument(respDoc)
+}
+
+func RegisterAggregateCommandHandler(mux *mongo.CommandMux, h AggregateCommandHandler) {
+	mux.Handlers["aggregate"] = &aggregateCommandHandlerImpl{impl: h}
 }
 
 type BuildInfoCommandHandler interface {
@@ -74,6 +136,70 @@ func (h *buildInfoCommandHandlerImpl) HandleCommand(ctx context.Context, resp mo
 func RegisterBuildInfoCommandHandler(mux *mongo.CommandMux, h BuildInfoCommandHandler) {
 	mux.Handlers["buildInfo"] = &buildInfoCommandHandlerImpl{impl: h}
 	mux.Handlers["buildinfo"] = mux.Handlers["buildInfo"]
+}
+
+type GetLastErrorCommandHandler interface {
+	HandleGetLastError(context.Context, *mongo.CommandRequest, *GetLastErrorRequest) (*GetLastErrorResponse, error)
+}
+
+type GetLastErrorCommandHandlerFunc func(context.Context, *mongo.CommandRequest, *GetLastErrorRequest) (*GetLastErrorResponse, error)
+
+func (f GetLastErrorCommandHandlerFunc) HandleGetLastError(ctx context.Context, orig *mongo.CommandRequest, req *GetLastErrorRequest) (*GetLastErrorResponse, error) {
+	return f(ctx, orig, req)
+}
+
+type GetLastErrorRequest struct {
+}
+
+type GetLastErrorResponse struct {
+	OK           int32  `json:"ok" bson:"ok"`
+	WrittenTo    string `json:"writtenTo" bson:"writtenTo"`
+	Err          string `json:"err" bson:"err"`
+	SyncMillis   int32  `json:"syncMillis" bson:"syncMillis"`
+	N            int32  `json:"n" bson:"n"`
+	ConnectionID int32  `json:"connectionID" bson:"connectionID"`
+}
+
+type getLastErrorCommandHandlerImpl struct {
+	impl GetLastErrorCommandHandler
+}
+
+func (h *getLastErrorCommandHandlerImpl) HandleCommand(ctx context.Context, resp mongo.CommandResponseWriter, req *mongo.CommandRequest) error {
+	reg := bson.DefaultRegistry
+	if rp, ok := h.impl.(registryProvider); ok {
+		reg = rp.Registry(ctx)
+	}
+
+	var typedReq GetLastErrorRequest
+	if err := bson.UnmarshalWithRegistry(reg, req.Document, &typedReq); err != nil {
+		return &mongo.Error{
+			Code:     mongo.CodeFailedToParse,
+			CodeName: mongo.CodeToName(mongo.CodeFailedToParse),
+			Message:  "invalid getLastError command",
+			Cause:    err,
+		}
+	}
+
+	typedResp, err := h.impl.HandleGetLastError(ctx, req, &typedReq)
+	if err != nil {
+		return err
+	}
+
+	respDoc, err := bson.MarshalWithRegistry(reg, typedResp)
+	if err != nil {
+		return &mongo.Error{
+			Code:     mongo.CodeInternalError,
+			CodeName: mongo.CodeToName(mongo.CodeInternalError),
+			Message:  "failed marshaling getLastError command output",
+			Cause:    err,
+		}
+	}
+
+	return resp.WriteSingleDocument(respDoc)
+}
+
+func RegisterGetLastErrorCommandHandler(mux *mongo.CommandMux, h GetLastErrorCommandHandler) {
+	mux.Handlers["getLastError"] = &getLastErrorCommandHandlerImpl{impl: h}
 }
 
 type IsMasterCommandHandler interface {
@@ -146,73 +272,28 @@ func RegisterIsMasterCommandHandler(mux *mongo.CommandMux, h IsMasterCommandHand
 	mux.Handlers["ismaster"] = mux.Handlers["isMaster"]
 }
 
-type CustomCommandHandler interface {
-	HandleCustom(context.Context, *mongo.CommandRequest, *CustomRequest) (*CustomResponse, error)
-}
-
-type CustomCommandHandlerFunc func(context.Context, *mongo.CommandRequest, *CustomRequest) (*CustomResponse, error)
-
-func (f CustomCommandHandlerFunc) HandleCustom(ctx context.Context, orig *mongo.CommandRequest, req *CustomRequest) (*CustomResponse, error) {
-	return f(ctx, orig, req)
-}
-
-type CustomRequest struct {
-}
-
-type CustomResponse struct {
-	OK int32 `json:"ok" bson:"ok"`
-}
-
-type customCommandHandlerImpl struct {
-	impl CustomCommandHandler
-}
-
-func (h *customCommandHandlerImpl) HandleCommand(ctx context.Context, resp mongo.CommandResponseWriter, req *mongo.CommandRequest) error {
-	reg := bson.DefaultRegistry
-	if rp, ok := h.impl.(registryProvider); ok {
-		reg = rp.Registry(ctx)
-	}
-
-	var typedReq CustomRequest
-	if err := bson.UnmarshalWithRegistry(reg, req.Document, &typedReq); err != nil {
-		return &mongo.Error{
-			Code:     mongo.CodeFailedToParse,
-			CodeName: mongo.CodeToName(mongo.CodeFailedToParse),
-			Message:  "invalid custom command",
-			Cause:    err,
-		}
-	}
-
-	typedResp, err := h.impl.HandleCustom(ctx, req, &typedReq)
-	if err != nil {
-		return err
-	}
-
-	respDoc, err := bson.MarshalWithRegistry(reg, typedResp)
-	if err != nil {
-		return &mongo.Error{
-			Code:     mongo.CodeInternalError,
-			CodeName: mongo.CodeToName(mongo.CodeInternalError),
-			Message:  "failed marshaling custom command output",
-			Cause:    err,
-		}
-	}
-
-	return resp.WriteSingleDocument(respDoc)
-}
-
-func RegisterCustomCommandHandler(mux *mongo.CommandMux, h CustomCommandHandler) {
-	mux.Handlers["custom"] = &customCommandHandlerImpl{impl: h}
-}
-
 type BasicService interface {
+	AggregateCommandHandler
 	BuildInfoCommandHandler
+	GetLastErrorCommandHandler
 	IsMasterCommandHandler
-	CustomCommandHandler
 }
 
 func RegisterBasicService(mux *mongo.CommandMux, svc BasicService) {
+	RegisterAggregateCommandHandler(mux, svc)
 	RegisterBuildInfoCommandHandler(mux, svc)
+	RegisterGetLastErrorCommandHandler(mux, svc)
 	RegisterIsMasterCommandHandler(mux, svc)
-	RegisterCustomCommandHandler(mux, svc)
+}
+
+type CursorFirst struct {
+	FirstBatch bsoncore.Array `json:"firstBatch" bson:"firstBatch"`
+	ID         int64          `json:"id" bson:"id"`
+	NS         string         `json:"ns" bson:"ns"`
+}
+
+type CursorNext struct {
+	NextBatch bsoncore.Array `json:"nextBatch" bson:"nextBatch"`
+	ID        int64          `json:"id" bson:"id"`
+	NS        string         `json:"ns" bson:"ns"`
 }

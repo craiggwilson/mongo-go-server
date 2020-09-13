@@ -27,6 +27,7 @@ const (
 	CodeCommandNotSupported       = 115
 	CodeCommandFailed             = 125
 	CodeCommandNotSupportedOnView = 166
+	CodeInternalErrorNotSupported = 235
 	CodeDuplicateKey              = 11000
 	CodeInterrupted               = 11601
 	CodeOutOfDiskSpace            = 14031

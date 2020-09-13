@@ -28,7 +28,7 @@ var ErrAbortHandler = errors.New("abort")
 // ErrServerClosed is returned when an operation on a closed server occurs.
 var ErrServerClosed = errors.New("mongo: server closed")
 
-// ListenAndServe starts up a server at the specified address with messages
+// ListenAndServe starts a server at the specified address with messages
 // handled by the handler.
 func ListenAndServe(ctx context.Context, addr string, handler MessageHandler) error {
 	svr := &Server{
@@ -38,7 +38,7 @@ func ListenAndServe(ctx context.Context, addr string, handler MessageHandler) er
 	return svr.ListenAndServe(ctx, addr)
 }
 
-// Server starts upa a server using the specified listener.
+// Server starts a server using the specified listener.
 func Serve(ctx context.Context, l net.Listener, handler MessageHandler) error {
 	svr := &Server{
 		Handler: handler,
@@ -61,7 +61,7 @@ type Server struct {
 	MaxMessageSize  int32
 
 	ConnectionDecorator ConnectionDecorator
-	ConnStateHook       ConnStateHook
+	ConnectionStateHook ConnectionStateHook
 
 	mu            sync.Mutex
 	doneChan      chan struct{}
@@ -146,7 +146,7 @@ func (s *Server) Serve(ctx context.Context, l net.Listener) error {
 		if s.ConnectionDecorator != nil {
 			connCtx, rwc = s.ConnectionDecorator.DecorateConnection(ctx, rwc)
 			if connCtx == nil || rwc == nil {
-				panic("ConnDecorator cannot return a nil context.Context or net.Conn")
+				panic("ConnectionDecorator cannot return a nil context.Context or net.Conn")
 			}
 		}
 		tempDelay = 0
@@ -156,6 +156,7 @@ func (s *Server) Serve(ctx context.Context, l net.Listener) error {
 	}
 }
 
+// Shutdown gracefully shuts down all the listeners without interupting any active connections.
 func (s *Server) Shutdown(ctx context.Context) error {
 	atomic.StoreInt32(&s.inShutdown, 1)
 
@@ -195,7 +196,7 @@ func (s *Server) closeIdleConns() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	allIdle := true
+	allClosed := true
 	for c := range s.conns {
 		if s.IdleTimeout > 0 {
 			st, secs := c.getState()
@@ -211,10 +212,10 @@ func (s *Server) closeIdleConns() bool {
 			}
 		}
 
-		allIdle = false
+		allClosed = false
 	}
 
-	return allIdle
+	return allClosed
 }
 
 func (s *Server) closeListenersLocked() error {
@@ -245,7 +246,7 @@ func (s *Server) handler() MessageHandler {
 	h := s.Handler
 	if h == nil {
 		h = MessageHandlerFunc(func(ctx context.Context, resp MessageResponseWriter, req *MessageRequest) error {
-			return newError(nil, 235, "no handlers configured")
+			return newError(nil, CodeInternalErrorNotSupported, "no handlers configured")
 		})
 	}
 
@@ -351,16 +352,16 @@ func (f ConnectionDecoratorFunc) DecorateConnection(ctx context.Context, c net.C
 	return f(ctx, c)
 }
 
-// A ConnState represents the state of a client connection to a server.
-// It's used by the optional Server.ConnState hook.
-type ConnState int
+// A ConnectionState represents the state of a client connection to a server.
+// It's used by the optional Server.ConnectionState hook.
+type ConnectionState int
 
 const (
 	// StateNew represents a new connection that is expected to
 	// send a request immediately. Connections begin at this
 	// state and then transition to either StateActive or
 	// StateClosed.
-	StateNew ConnState = iota
+	StateNew ConnectionState = iota
 
 	// StateActive represents a connection that has read 1 or more
 	// bytes of a request. The Server.ConnState hook for
@@ -381,7 +382,7 @@ const (
 	StateClosed
 )
 
-var stateName = map[ConnState]string{
+var stateName = map[ConnectionState]string{
 	StateNew:      "new",
 	StateActive:   "active",
 	StateInactive: "inactive",
@@ -389,20 +390,20 @@ var stateName = map[ConnState]string{
 }
 
 // String implements the fmt.Stringer interface.
-func (c ConnState) String() string {
+func (c ConnectionState) String() string {
 	return stateName[c]
 }
 
-// ConnStateHook is an interface for handling a connection state change.
-type ConnStateHook interface {
-	OnConnStateChange(ctx context.Context, c net.Conn, st ConnState, d time.Duration)
+// ConnectionStateHook is an interface for handling a connection state change.
+type ConnectionStateHook interface {
+	OnConnectionStateChange(ctx context.Context, c net.Conn, st ConnectionState, d time.Duration)
 }
 
-// ConnStateHookFunc is a function implementation of ConnStateHook.
-type ConnStateHookFunc func(context.Context, net.Conn, ConnState, time.Duration)
+// ConnectionStateHookFunc is a function implementation of the ConnectionStateHook interface.
+type ConnectionStateHookFunc func(context.Context, net.Conn, ConnectionState, time.Duration)
 
 // OnStateChange implements the ConnStateHook interface.
-func (f ConnStateHookFunc) OnConnStateChange(ctx context.Context, c net.Conn, st ConnState, d time.Duration) {
+func (f ConnectionStateHookFunc) OnConnectionStateChange(ctx context.Context, c net.Conn, st ConnectionState, d time.Duration) {
 	f(ctx, c, st, d)
 }
 
@@ -513,12 +514,12 @@ func (c *conn) serve(ctx context.Context) {
 	}
 }
 
-func (c *conn) getState() (ConnState, int64) {
+func (c *conn) getState() (ConnectionState, int64) {
 	packedState := atomic.LoadUint64(&c.curState.atomic)
-	return ConnState(packedState & 0xff), int64(packedState >> 8)
+	return ConnectionState(packedState & 0xff), int64(packedState >> 8)
 }
 
-func (c *conn) setState(nc net.Conn, state ConnState) {
+func (c *conn) setState(nc net.Conn, state ConnectionState) {
 	srv := c.server
 	switch state {
 	case StateNew:
@@ -528,15 +529,15 @@ func (c *conn) setState(nc net.Conn, state ConnState) {
 	}
 
 	if state > 0xff || state < 0 {
-		panic("internal error")
+		panic("internal error: conn state invalid")
 	}
 
 	secs := time.Now().Unix() << 8
 
 	packedState := uint64(secs) | uint64(state)
 	atomic.StoreUint64(&c.curState.atomic, packedState)
-	if hook := srv.ConnStateHook; hook != nil {
-		hook.OnConnStateChange(c.ctx, nc, state, time.Duration(secs)*time.Second)
+	if hook := srv.ConnectionStateHook; hook != nil {
+		hook.OnConnectionStateChange(c.ctx, nc, state, time.Duration(secs)*time.Second)
 	}
 }
 

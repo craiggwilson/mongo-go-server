@@ -3,13 +3,18 @@ package main
 import (
 	"context"
 	"log"
+	"net"
 	"os"
 	"strconv"
 	"strings"
+	"sync/atomic"
 
 	"github.com/craiggwilson/mongo-go-server/examples/basic/internal"
 	"github.com/craiggwilson/mongo-go-server/mongo"
+	"go.mongodb.org/mongo-driver/x/bsonx/bsoncore"
 )
+
+var nextConnectionID = int32(0)
 
 func main() {
 	mux := mongo.NewCommandMux()
@@ -21,7 +26,14 @@ func main() {
 
 	svr := &mongo.Server{
 		Handler: mux,
-		// ConnectionDecorator: mongo.TLSConnectionDecorator(&tls.Config{}),
+		ConnectionDecorator: mongo.ChainConnectionDecorators(
+			mongo.ConnectionDebuggingDecorator{},
+			mongo.ConnectionDecoratorFunc(func(ctx context.Context, c net.Conn) (context.Context, net.Conn) {
+				return context.WithValue(ctx, "basic-connection-state", &CustomConnectionState{
+					connectionID: atomic.AddInt32(&nextConnectionID, 1),
+				}), c
+			}),
+		),
 	}
 
 	log.Println("serving MongoDB...")
@@ -31,6 +43,10 @@ func main() {
 	}
 }
 
+type CustomConnectionState struct {
+	connectionID int32
+}
+
 type basicService struct {
 	LogicalSessionTimeoutMinutes int32
 	MaxBatchSize                 int32
@@ -38,6 +54,22 @@ type basicService struct {
 	MinWireVersion               int32
 	ReadOnly                     bool
 	VersionArray                 []int32
+}
+
+func (svc *basicService) HandleAggregate(_ context.Context, raw *mongo.CommandRequest, req *internal.AggregateRequest) (*internal.AggregateResponse, error) {
+	log.Printf("aggregate: pipeline: %s", req.Pipeline)
+
+	_, batch := bsoncore.AppendArrayStart(nil)
+	batch, _ = bsoncore.AppendArrayEnd(batch, 0)
+
+	return &internal.AggregateResponse{
+		OK: 1,
+		Cursor: internal.CursorFirst{
+			FirstBatch: batch,
+			ID:         0,
+			NS:         "",
+		},
+	}, nil
 }
 
 func (svc *basicService) HandleBuildInfo(_ context.Context, _ *mongo.CommandRequest, _ *internal.BuildInfoRequest) (*internal.BuildInfoResponse, error) {
@@ -53,11 +85,15 @@ func (svc *basicService) HandleBuildInfo(_ context.Context, _ *mongo.CommandRequ
 	}, nil
 }
 
-func (svc *basicService) HandleCustom(ctx context.Context, _ *mongo.CommandRequest, _ *internal.CustomRequest) (*internal.CustomResponse, error) {
-	return nil, &mongo.Error{
-		Code:    10,
-		Message: "AHAHAHA",
-	}
+func (svc *basicService) HandleGetLastError(ctx context.Context, _ *mongo.CommandRequest, _ *internal.GetLastErrorRequest) (*internal.GetLastErrorResponse, error) {
+	state := ctx.Value("basic-connection-state").(*CustomConnectionState)
+
+	return &internal.GetLastErrorResponse{
+		OK:           1,
+		WrittenTo:    "null",
+		Err:          "null",
+		ConnectionID: state.connectionID,
+	}, nil
 }
 
 func (svc *basicService) HandleIsMaster(ctx context.Context, _ *mongo.CommandRequest, req *internal.IsMasterRequest) (*internal.IsMasterResponse, error) {

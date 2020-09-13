@@ -70,6 +70,18 @@ func (g *generator) generate() error {
 		"serviceCommandHandlerName": func(cmdName string) string {
 			return fmt.Sprintf("%sCommandHandler", strings.Title(cmdName))
 		},
+		"structName": func(s *tree.Struct) string {
+			return strings.Title(s.Name)
+		},
+		"typeRefName": func(f *tree.Field) string {
+			for _, s := range g.t.Structs {
+				if s.Name == f.TypeRef {
+					return strings.Title(s.Name)
+				}
+			}
+
+			return f.TypeRef
+		},
 	}).Parse(tmpl))
 	return tmpl.Execute(g.w, g.t)
 }
@@ -105,7 +117,7 @@ var tmpl = `
 		type {{requestName .}} struct {
 			{{with .Request}}
 				{{range .Fields -}}
-					{{fieldName .}} {{.TypeRef}} ` + "`" + `json:"{{.Name}}" bson:"{{.Name}}"` + "`" + `
+					{{fieldName .}} {{typeRefName .}} ` + "`" + `json:"{{.Name}}" bson:"{{.Name}}"` + "`" + `
 				{{end}}
 			{{end}}
 		}
@@ -113,7 +125,7 @@ var tmpl = `
 		type {{responseName .}} struct {
 			{{with .Response}}
 				{{range .Fields -}}
-					{{fieldName .}} {{.TypeRef}} ` + "`" + `json:"{{.Name}}" bson:"{{.Name}}"` + "`" + `
+					{{fieldName .}} {{typeRefName .}} ` + "`" + `json:"{{.Name}}" bson:"{{.Name}}"` + "`" + `
 				{{end}}
 			{{end}}
 		}
@@ -180,9 +192,9 @@ var tmpl = `
 	{{end}}
 
 	{{range .Structs}}
-		type {{.Name}} struct {
+		type {{structName .}} struct {
 			{{range .Fields -}}
-				{{fieldName .}} {{.TypeRef}} ` + "`" + `json:"{{.Name}}" bson:"{{.Name}}"` + "`" + `
+				{{fieldName .}} {{typeRefName .}} ` + "`" + `json:"{{.Name}}" bson:"{{.Name}}"` + "`" + `
 			{{end}}
 		}
 	{{end}}

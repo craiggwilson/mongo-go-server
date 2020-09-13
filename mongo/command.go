@@ -22,7 +22,7 @@ func (f CommandHandlerFunc) HandleCommand(ctx context.Context, resp CommandRespo
 	return f(ctx, resp, req)
 }
 
-// CommandRequest holds the information about the command to execute.
+// CommandRequest holds information about the command to execute.
 type CommandRequest struct {
 	*MessageRequest
 
@@ -219,7 +219,7 @@ func readOpMsgMainDocument(resp MessageResponseWriter, req *MessageRequest, rem 
 				return nil, newError(nil, CodeProtocolError, "could not read type 0 section")
 			}
 		case wiremessage.DocumentSequence:
-			// we don't actually care about this type, so let's just skip it...
+			// we don't care about this type yet, so let's just skip it...
 			seqLength, _, ok := bsoncore.ReadLength(rem)
 			if !ok {
 				return nil, newError(nil, CodeProtocolError, "could not read type 1 section: not enough bytes")
