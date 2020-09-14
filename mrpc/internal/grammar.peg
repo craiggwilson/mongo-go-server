@@ -43,14 +43,16 @@ AttributeLang <- lang:ID ":" {
     return lang.(string), nil
 }
 
-Command <- _ "command" __ name:ID _ "{" _ attrs:Attribute* _ req:Request _ resp:Response _ "}" {
+Command <- _ "command" __ name:ID _ "{" _ attrs:Attribute* _ req:Request? _ resp:Response _ "}" {
     t := tree.NewCommand(name.(string))
     
     for _, attr := range toIfaceSlice(attrs) {
         t.AddAttribute(attr.(*tree.Attribute))
     }
 
-    t.Request = req.(*tree.Struct)
+    if req != nil {
+        t.Request = req.(*tree.Struct)
+    }
     t.Response = resp.(*tree.Struct)
 
     return t, nil
@@ -130,7 +132,7 @@ ID <- [a-zA-Z] [a-zA-Z0-9_]* {
     return string(c.text), nil
 }
 
-TypeRef <- ID ("." ID)* {
+TypeRef <- "$"? ID ("." ID)* {
     return string(c.text), nil
 }
 

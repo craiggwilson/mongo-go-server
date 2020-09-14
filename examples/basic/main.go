@@ -3,18 +3,14 @@ package main
 import (
 	"context"
 	"log"
-	"net"
 	"os"
 	"strconv"
 	"strings"
-	"sync/atomic"
 
 	"github.com/craiggwilson/mongo-go-server/examples/basic/internal"
 	"github.com/craiggwilson/mongo-go-server/mongo"
 	"go.mongodb.org/mongo-driver/x/bsonx/bsoncore"
 )
-
-var nextConnectionID = int32(0)
 
 func main() {
 	mux := mongo.NewCommandMux()
@@ -24,27 +20,11 @@ func main() {
 		VersionArray:   []int32{4, 2, 0},
 	})
 
-	svr := &mongo.Server{
-		Handler: mux,
-		ConnectionDecorator: mongo.ChainConnectionDecorators(
-			mongo.ConnectionDebuggingDecorator{},
-			mongo.ConnectionDecoratorFunc(func(ctx context.Context, c net.Conn) (context.Context, net.Conn) {
-				return context.WithValue(ctx, "basic-connection-state", &CustomConnectionState{
-					connectionID: atomic.AddInt32(&nextConnectionID, 1),
-				}), c
-			}),
-		),
-	}
-
 	log.Println("serving MongoDB...")
-	if err := svr.ListenAndServe(context.Background(), mongo.DefaultAddr); err != nil {
+	if err := mongo.ListenAndServe(context.Background(), mongo.DefaultAddr, mux); err != nil {
 		log.Println(err)
 		os.Exit(1)
 	}
-}
-
-type CustomConnectionState struct {
-	connectionID int32
 }
 
 type basicService struct {
@@ -56,7 +36,7 @@ type basicService struct {
 	VersionArray                 []int32
 }
 
-func (svc *basicService) HandleAggregate(_ context.Context, raw *mongo.CommandRequest, req *internal.AggregateRequest) (*internal.AggregateResponse, error) {
+func (svc *basicService) HandleAggregate(_ context.Context, req *internal.AggregateRequest) (*internal.AggregateResponse, error) {
 	log.Printf("aggregate: pipeline: %s", req.Pipeline)
 
 	_, batch := bsoncore.AppendArrayStart(nil)
@@ -72,7 +52,7 @@ func (svc *basicService) HandleAggregate(_ context.Context, raw *mongo.CommandRe
 	}, nil
 }
 
-func (svc *basicService) HandleBuildInfo(_ context.Context, _ *mongo.CommandRequest, _ *internal.BuildInfoRequest) (*internal.BuildInfoResponse, error) {
+func (svc *basicService) HandleBuildInfo(_ context.Context) (*internal.BuildInfoResponse, error) {
 	versionStrArray := make([]string, 0, len(svc.VersionArray))
 	for _, p := range svc.VersionArray {
 		versionStrArray = append(versionStrArray, strconv.Itoa(int(p)))
@@ -85,18 +65,16 @@ func (svc *basicService) HandleBuildInfo(_ context.Context, _ *mongo.CommandRequ
 	}, nil
 }
 
-func (svc *basicService) HandleGetLastError(ctx context.Context, _ *mongo.CommandRequest, _ *internal.GetLastErrorRequest) (*internal.GetLastErrorResponse, error) {
-	state := ctx.Value("basic-connection-state").(*CustomConnectionState)
-
+func (svc *basicService) HandleGetLastError(_ context.Context, req *internal.GetLastErrorRequest) (*internal.GetLastErrorResponse, error) {
 	return &internal.GetLastErrorResponse{
 		OK:           1,
 		WrittenTo:    "null",
 		Err:          "null",
-		ConnectionID: state.connectionID,
+		ConnectionID: int32(req.ConnectionID),
 	}, nil
 }
 
-func (svc *basicService) HandleIsMaster(ctx context.Context, _ *mongo.CommandRequest, req *internal.IsMasterRequest) (*internal.IsMasterResponse, error) {
+func (svc *basicService) HandleIsMaster(ctx context.Context, req *internal.IsMasterRequest) (*internal.IsMasterResponse, error) {
 	svr := mongo.ServerFromContext(ctx)
 	maxDocumentSize := svr.MaxDocumentSize
 	if maxDocumentSize == 0 {

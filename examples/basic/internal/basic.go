@@ -16,17 +16,18 @@ type registryProvider interface {
 }
 
 type AggregateCommandHandler interface {
-	HandleAggregate(context.Context, *mongo.CommandRequest, *AggregateRequest) (*AggregateResponse, error)
+	HandleAggregate(context.Context, *AggregateRequest) (*AggregateResponse, error)
 }
 
-type AggregateCommandHandlerFunc func(context.Context, *mongo.CommandRequest, *AggregateRequest) (*AggregateResponse, error)
+type AggregateCommandHandlerFunc func(context.Context, *AggregateRequest) (*AggregateResponse, error)
 
-func (f AggregateCommandHandlerFunc) HandleAggregate(ctx context.Context, orig *mongo.CommandRequest, req *AggregateRequest) (*AggregateResponse, error) {
-	return f(ctx, orig, req)
+func (f AggregateCommandHandlerFunc) HandleAggregate(ctx context.Context, req *AggregateRequest) (*AggregateResponse, error) {
+	return f(ctx, req)
 }
 
 type AggregateRequest struct {
-	Pipeline bsoncore.Array `json:"pipeline" bson:"pipeline"`
+	DatabaseName string         `json:"-" bson:"-"`
+	Pipeline     bsoncore.Array `json:"pipeline" bson:"pipeline"`
 }
 
 type AggregateResponse struct {
@@ -54,11 +55,12 @@ func (h *aggregateCommandHandlerImpl) HandleCommand(ctx context.Context, resp mo
 		}
 	}
 
-	typedResp, err := h.impl.HandleAggregate(ctx, req, &typedReq)
+	typedReq.DatabaseName = req.DatabaseName
+
+	typedResp, err := h.impl.HandleAggregate(ctx, &typedReq)
 	if err != nil {
 		return err
 	}
-
 	respDoc, err := bson.MarshalWithRegistry(reg, typedResp)
 	if err != nil {
 		return &mongo.Error{
@@ -77,16 +79,13 @@ func RegisterAggregateCommandHandler(mux *mongo.CommandMux, h AggregateCommandHa
 }
 
 type BuildInfoCommandHandler interface {
-	HandleBuildInfo(context.Context, *mongo.CommandRequest, *BuildInfoRequest) (*BuildInfoResponse, error)
+	HandleBuildInfo(context.Context) (*BuildInfoResponse, error)
 }
 
-type BuildInfoCommandHandlerFunc func(context.Context, *mongo.CommandRequest, *BuildInfoRequest) (*BuildInfoResponse, error)
+type BuildInfoCommandHandlerFunc func(context.Context) (*BuildInfoResponse, error)
 
-func (f BuildInfoCommandHandlerFunc) HandleBuildInfo(ctx context.Context, orig *mongo.CommandRequest, req *BuildInfoRequest) (*BuildInfoResponse, error) {
-	return f(ctx, orig, req)
-}
-
-type BuildInfoRequest struct {
+func (f BuildInfoCommandHandlerFunc) HandleBuildInfo(ctx context.Context) (*BuildInfoResponse, error) {
+	return f(ctx)
 }
 
 type BuildInfoResponse struct {
@@ -105,21 +104,10 @@ func (h *buildInfoCommandHandlerImpl) HandleCommand(ctx context.Context, resp mo
 		reg = rp.Registry(ctx)
 	}
 
-	var typedReq BuildInfoRequest
-	if err := bson.UnmarshalWithRegistry(reg, req.Document, &typedReq); err != nil {
-		return &mongo.Error{
-			Code:     mongo.CodeFailedToParse,
-			CodeName: mongo.CodeToName(mongo.CodeFailedToParse),
-			Message:  "invalid buildInfo command",
-			Cause:    err,
-		}
-	}
-
-	typedResp, err := h.impl.HandleBuildInfo(ctx, req, &typedReq)
+	typedResp, err := h.impl.HandleBuildInfo(ctx)
 	if err != nil {
 		return err
 	}
-
 	respDoc, err := bson.MarshalWithRegistry(reg, typedResp)
 	if err != nil {
 		return &mongo.Error{
@@ -139,16 +127,17 @@ func RegisterBuildInfoCommandHandler(mux *mongo.CommandMux, h BuildInfoCommandHa
 }
 
 type GetLastErrorCommandHandler interface {
-	HandleGetLastError(context.Context, *mongo.CommandRequest, *GetLastErrorRequest) (*GetLastErrorResponse, error)
+	HandleGetLastError(context.Context, *GetLastErrorRequest) (*GetLastErrorResponse, error)
 }
 
-type GetLastErrorCommandHandlerFunc func(context.Context, *mongo.CommandRequest, *GetLastErrorRequest) (*GetLastErrorResponse, error)
+type GetLastErrorCommandHandlerFunc func(context.Context, *GetLastErrorRequest) (*GetLastErrorResponse, error)
 
-func (f GetLastErrorCommandHandlerFunc) HandleGetLastError(ctx context.Context, orig *mongo.CommandRequest, req *GetLastErrorRequest) (*GetLastErrorResponse, error) {
-	return f(ctx, orig, req)
+func (f GetLastErrorCommandHandlerFunc) HandleGetLastError(ctx context.Context, req *GetLastErrorRequest) (*GetLastErrorResponse, error) {
+	return f(ctx, req)
 }
 
 type GetLastErrorRequest struct {
+	ConnectionID uint64 `json:"-" bson:"-"`
 }
 
 type GetLastErrorResponse struct {
@@ -180,11 +169,12 @@ func (h *getLastErrorCommandHandlerImpl) HandleCommand(ctx context.Context, resp
 		}
 	}
 
-	typedResp, err := h.impl.HandleGetLastError(ctx, req, &typedReq)
+	typedReq.ConnectionID = req.ConnectionID
+
+	typedResp, err := h.impl.HandleGetLastError(ctx, &typedReq)
 	if err != nil {
 		return err
 	}
-
 	respDoc, err := bson.MarshalWithRegistry(reg, typedResp)
 	if err != nil {
 		return &mongo.Error{
@@ -203,13 +193,13 @@ func RegisterGetLastErrorCommandHandler(mux *mongo.CommandMux, h GetLastErrorCom
 }
 
 type IsMasterCommandHandler interface {
-	HandleIsMaster(context.Context, *mongo.CommandRequest, *IsMasterRequest) (*IsMasterResponse, error)
+	HandleIsMaster(context.Context, *IsMasterRequest) (*IsMasterResponse, error)
 }
 
-type IsMasterCommandHandlerFunc func(context.Context, *mongo.CommandRequest, *IsMasterRequest) (*IsMasterResponse, error)
+type IsMasterCommandHandlerFunc func(context.Context, *IsMasterRequest) (*IsMasterResponse, error)
 
-func (f IsMasterCommandHandlerFunc) HandleIsMaster(ctx context.Context, orig *mongo.CommandRequest, req *IsMasterRequest) (*IsMasterResponse, error) {
-	return f(ctx, orig, req)
+func (f IsMasterCommandHandlerFunc) HandleIsMaster(ctx context.Context, req *IsMasterRequest) (*IsMasterResponse, error) {
+	return f(ctx, req)
 }
 
 type IsMasterRequest struct {
@@ -249,11 +239,10 @@ func (h *isMasterCommandHandlerImpl) HandleCommand(ctx context.Context, resp mon
 		}
 	}
 
-	typedResp, err := h.impl.HandleIsMaster(ctx, req, &typedReq)
+	typedResp, err := h.impl.HandleIsMaster(ctx, &typedReq)
 	if err != nil {
 		return err
 	}
-
 	respDoc, err := bson.MarshalWithRegistry(reg, typedResp)
 	if err != nil {
 		return &mongo.Error{

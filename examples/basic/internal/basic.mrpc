@@ -9,7 +9,7 @@ service basic {
 
 command aggregate {
     request {
-        @raw "true";
+        databaseName $databaseName;
 
         pipeline bsoncore.Array;
     }
@@ -23,8 +23,6 @@ command aggregate {
 command buildInfo {
     @alias "buildinfo";
 
-    request {}
-
     response {
         ok int32;
         version string;
@@ -33,9 +31,11 @@ command buildInfo {
 }
 
 command getLastError {
-    request{}
+    request {
+        connectionID $connectionID;
+    }
 
-    response{
+    response {
         ok int32;
         writtenTo string;
         err string;

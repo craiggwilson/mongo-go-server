@@ -44,6 +44,16 @@ func (g *generator) generate() error {
 			}
 			return strings.Title(f.Name)
 		},
+		"fieldStructTagName": func(f *tree.Field) string {
+			switch f.TypeRef {
+			case "$connectionID":
+				return "-"
+			case "$databaseName":
+				return "-"
+			}
+
+			return f.Name
+		},
 		"handlerName": func(cmd *tree.Command) string {
 			return fmt.Sprintf("%sCommandHandler", strings.Title(cmd.Name))
 		},
@@ -74,6 +84,13 @@ func (g *generator) generate() error {
 			return strings.Title(s.Name)
 		},
 		"typeRefName": func(f *tree.Field) string {
+			switch f.TypeRef {
+			case "$connectionID":
+				return "uint64"
+			case "$databaseName":
+				return "string"
+			}
+
 			for _, s := range g.t.Structs {
 				if s.Name == f.TypeRef {
 					return strings.Title(s.Name)
@@ -104,28 +121,40 @@ var tmpl = `
 	}
 
 	{{range .Commands}}
-		type {{handlerName .}} interface {
-			{{commandName .}}(context.Context, *mongo.CommandRequest, *{{requestName .}}) (*{{responseName .}}, error)
-		}
+		{{if .Request -}}
+			type {{handlerName .}} interface {
+				{{commandName .}}(context.Context, *{{requestName .}}) (*{{responseName .}}, error)
+			}
 
-		type {{handlerName .}}Func func(context.Context, *mongo.CommandRequest, *{{requestName .}}) (*{{responseName .}}, error)
+			type {{handlerName .}}Func func(context.Context, *{{requestName .}}) (*{{responseName .}}, error)
 
-		func (f {{handlerName .}}Func) {{commandName .}}(ctx context.Context, orig *mongo.CommandRequest, req *{{requestName .}}) (*{{responseName .}}, error) {
-			return f(ctx, orig, req)
-		}
+			func (f {{handlerName .}}Func) {{commandName .}}(ctx context.Context, req *{{requestName .}}) (*{{responseName .}}, error) {
+				return f(ctx, req)
+			}
 
-		type {{requestName .}} struct {
-			{{with .Request}}
-				{{range .Fields -}}
-					{{fieldName .}} {{typeRefName .}} ` + "`" + `json:"{{.Name}}" bson:"{{.Name}}"` + "`" + `
+			type {{requestName .}} struct {
+				{{with .Request}}
+					{{range .Fields -}}
+						{{fieldName .}} {{typeRefName .}} ` + "`" + `json:"{{fieldStructTagName .}}" bson:"{{fieldStructTagName .}}"` + "`" + `
+					{{end}}
 				{{end}}
-			{{end}}
-		}
+			}
+		{{else -}}
+			type {{handlerName .}} interface {
+				{{commandName .}}(context.Context) (*{{responseName .}}, error)
+			}
+
+			type {{handlerName .}}Func func(context.Context) (*{{responseName .}}, error)
+
+			func (f {{handlerName .}}Func) {{commandName .}}(ctx context.Context) (*{{responseName .}}, error) {
+				return f(ctx)
+			}
+		{{end}}
 
 		type {{responseName .}} struct {
 			{{with .Response}}
 				{{range .Fields -}}
-					{{fieldName .}} {{typeRefName .}} ` + "`" + `json:"{{.Name}}" bson:"{{.Name}}"` + "`" + `
+					{{fieldName .}} {{typeRefName .}} ` + "`" + `json:"{{fieldStructTagName .}}" bson:"{{fieldStructTagName .}}"` + "`" + `
 				{{end}}
 			{{end}}
 		}
@@ -140,20 +169,35 @@ var tmpl = `
 				reg = rp.Registry(ctx)
 			}
 
-			var typedReq {{requestName .}}
-			if err := bson.UnmarshalWithRegistry(reg, req.Document, &typedReq); err != nil {
-				return &mongo.Error{
-					Code: mongo.CodeFailedToParse,
-					CodeName: mongo.CodeToName(mongo.CodeFailedToParse),
-					Message: "invalid {{.Name}} command",
-					Cause: err,
+			{{if .Request -}}
+				var typedReq {{requestName .}}
+				if err := bson.UnmarshalWithRegistry(reg, req.Document, &typedReq); err != nil {
+					return &mongo.Error{
+						Code: mongo.CodeFailedToParse,
+						CodeName: mongo.CodeToName(mongo.CodeFailedToParse),
+						Message: "invalid {{.Name}} command",
+						Cause: err,
+					}
 				}
-			}
 
-			typedResp, err := h.impl.{{commandName .}}(ctx, req, &typedReq)
-			if err != nil {
-				return err
-			}
+				{{range .Request.Fields -}}
+					{{if eq .TypeRef "$connectionID" -}}
+						typedReq.{{fieldName .}} = req.ConnectionID
+					{{else if eq .TypeRef "$databaseName" -}}
+						typedReq.{{fieldName .}} = req.DatabaseName
+					{{end -}}
+				{{end}}
+
+				typedResp, err := h.impl.{{commandName .}}(ctx, &typedReq)
+				if err != nil {
+					return err
+				}
+			{{else -}}
+				typedResp, err := h.impl.{{commandName .}}(ctx)
+				if err != nil {
+					return err
+				}
+			{{end -}}
 
 			respDoc, err := bson.MarshalWithRegistry(reg, typedResp)
 			if err != nil {
@@ -194,7 +238,7 @@ var tmpl = `
 	{{range .Structs}}
 		type {{structName .}} struct {
 			{{range .Fields -}}
-				{{fieldName .}} {{typeRefName .}} ` + "`" + `json:"{{.Name}}" bson:"{{.Name}}"` + "`" + `
+				{{fieldName .}} {{typeRefName .}} ` + "`" + `json:"{{fieldStructTagName .}}" bson:"{{fieldStructTagName .}}"` + "`" + `
 			{{end}}
 		}
 	{{end}}

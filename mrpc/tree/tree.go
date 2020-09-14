@@ -96,7 +96,7 @@ func (ac *AttributeContainer) AddAttribute(attr *Attribute) {
 
 func (ac AttributeContainer) Attribute(lang, name string) string {
 	for _, attr := range ac {
-		if attr.Name == name {
+		if attr.matches(lang, name) {
 			return attr.Value
 		}
 	}
@@ -106,7 +106,7 @@ func (ac AttributeContainer) Attribute(lang, name string) string {
 
 func (ac AttributeContainer) AttributeOrDefault(lang, name string, def string) string {
 	for _, attr := range ac {
-		if attr.Name == name {
+		if attr.matches(lang, name) {
 			return attr.Value
 		}
 	}
@@ -117,7 +117,7 @@ func (ac AttributeContainer) AttributeOrDefault(lang, name string, def string) s
 func (ac AttributeContainer) Attributes(lang, name string) []string {
 	var values []string
 	for _, attr := range ac {
-		if attr.Name == name {
+		if attr.matches(lang, name) {
 			values = append(values, attr.Value)
 		}
 	}
@@ -128,7 +128,7 @@ func (ac AttributeContainer) Attributes(lang, name string) []string {
 func (ac AttributeContainer) AttributesOrDefault(lang, name string, def string) []string {
 	var values []string
 	for _, attr := range ac {
-		if attr.Name == name {
+		if attr.matches(lang, name) {
 			values = append(values, attr.Value)
 		}
 	}
@@ -152,4 +152,12 @@ type Attribute struct {
 	Lang  string
 	Name  string
 	Value string
+}
+
+func (a *Attribute) matches(lang, name string) bool {
+	if a.Name != name {
+		return false
+	}
+
+	return lang == "" || a.Lang == lang
 }
